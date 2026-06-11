@@ -156,24 +156,6 @@ export const mockLockers: Locker[] = (() => {
       });
     }
   });
-
-  const now = Date.now();
-  const pendingOrders: Array<{ id: string; lockerIds: string[]; checkedInAt: string; status: OrderStatus }> = [];
-  mockOrders.forEach((o) => {
-    if (o.status !== "picked" && o.status !== "refunded") {
-      pendingOrders.push({ id: o.id, lockerIds: o.lockerIds, checkedInAt: o.checkedInAt, status: o.status });
-    }
-  });
-  pendingOrders.forEach((po) => {
-    po.lockerIds.forEach((lid) => {
-      const locker = result.find((l) => l.id === lid);
-      if (locker) {
-        locker.status = "occupied";
-        locker.currentOrderId = po.id;
-        locker.occupiedAt = po.checkedInAt;
-      }
-    });
-  });
   return result;
 })();
 

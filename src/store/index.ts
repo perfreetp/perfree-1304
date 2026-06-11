@@ -65,9 +65,18 @@ function loadInitialState(): AppStateData {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as AppStateData;
-      return reconcileLockersAndOrders(parsed);
+      if (!parsed || !parsed.zones || !parsed.lockers || !parsed.orders) {
+        localStorage.removeItem(STORAGE_KEY);
+      } else {
+        try {
+          return reconcileLockersAndOrders(parsed);
+        } catch (e) {
+          localStorage.removeItem(STORAGE_KEY);
+        }
+      }
     }
   } catch {
+    localStorage.removeItem(STORAGE_KEY);
   }
   const seedCurrentUser = mockStaff.find((s) => s.role === "supervisor") || mockStaff[0];
   const raw: AppStateData = {
@@ -82,18 +91,35 @@ function loadInitialState(): AppStateData {
     currentUser: seedCurrentUser,
     activeZoneId: mockZones[0].id,
   };
-  return reconcileLockersAndOrders(raw);
+  try {
+    return reconcileLockersAndOrders(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function reconcileLockersAndOrders(state: AppStateData): AppStateData {
+  if (!state.zones) state.zones = [];
+  if (!state.lockers) state.lockers = [];
+  if (!state.orders) state.orders = [];
+  if (!state.incidents) state.incidents = [];
+  if (!state.staff) state.staff = [];
+  if (!state.shifts) state.shifts = [];
+  if (!state.handovers) state.handovers = [];
+  if (!state.financeRecords) state.financeRecords = [];
+  if (state.activeZoneId == null) state.activeZoneId = state.zones[0]?.id ?? null;
+  if (!state.currentUser) state.currentUser = state.staff.find((s) => s.role === "supervisor") ?? state.staff[0] ?? null;
+
   const occupiedLockerIds = new Set<string>();
   state.orders.forEach((o) => {
+    if (!o || !o.lockerIds) return;
     if (o.status !== "picked" && o.status !== "refunded") {
       o.lockerIds.forEach((lid) => occupiedLockerIds.add(lid));
     }
   });
   const lockerMap = new Map(state.lockers.map((l) => [l.id, l]));
   state.orders.forEach((o) => {
+    if (!o || !o.lockerIds) return;
     if (o.status === "picked" || o.status === "refunded") return;
     o.lockerIds.forEach((lid) => {
       const lk = lockerMap.get(lid);
@@ -105,6 +131,7 @@ function reconcileLockersAndOrders(state: AppStateData): AppStateData {
     });
   });
   state.lockers.forEach((lk) => {
+    if (!lk) return;
     if (!occupiedLockerIds.has(lk.id) && lk.status === "occupied") {
       lk.status = "free";
       lk.currentOrderId = undefined;
@@ -112,8 +139,10 @@ function reconcileLockersAndOrders(state: AppStateData): AppStateData {
     }
   });
   state.zones.forEach((z) => {
-    const used = state.lockers.filter((l) => l.zoneId === z.id && l.status === "occupied").length;
+    if (!z) return;
+    const used = state.lockers.filter((l) => l && l.zoneId === z.id && l.status === "occupied").length;
     z.usedLockers = used;
+    if (z.totalLockers == null) z.totalLockers = 0;
   });
   return state;
 }
