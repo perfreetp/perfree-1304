@@ -65,12 +65,12 @@ function loadInitialState(): AppStateData {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as AppStateData;
-      return parsed;
+      return reconcileLockersAndOrders(parsed);
     }
   } catch {
   }
   const seedCurrentUser = mockStaff.find((s) => s.role === "supervisor") || mockStaff[0];
-  return {
+  const raw: AppStateData = {
     zones: mockZones,
     lockers: mockLockers,
     orders: mockOrders,
@@ -82,6 +82,40 @@ function loadInitialState(): AppStateData {
     currentUser: seedCurrentUser,
     activeZoneId: mockZones[0].id,
   };
+  return reconcileLockersAndOrders(raw);
+}
+
+function reconcileLockersAndOrders(state: AppStateData): AppStateData {
+  const occupiedLockerIds = new Set<string>();
+  state.orders.forEach((o) => {
+    if (o.status !== "picked" && o.status !== "refunded") {
+      o.lockerIds.forEach((lid) => occupiedLockerIds.add(lid));
+    }
+  });
+  const lockerMap = new Map(state.lockers.map((l) => [l.id, l]));
+  state.orders.forEach((o) => {
+    if (o.status === "picked" || o.status === "refunded") return;
+    o.lockerIds.forEach((lid) => {
+      const lk = lockerMap.get(lid);
+      if (lk) {
+        lk.status = "occupied";
+        lk.currentOrderId = o.id;
+        lk.occupiedAt = lk.occupiedAt ?? o.checkedInAt;
+      }
+    });
+  });
+  state.lockers.forEach((lk) => {
+    if (!occupiedLockerIds.has(lk.id) && lk.status === "occupied") {
+      lk.status = "free";
+      lk.currentOrderId = undefined;
+      lk.occupiedAt = undefined;
+    }
+  });
+  state.zones.forEach((z) => {
+    const used = state.lockers.filter((l) => l.zoneId === z.id && l.status === "occupied").length;
+    z.usedLockers = used;
+  });
+  return state;
 }
 
 function persistState(state: AppStateData): void {
@@ -128,12 +162,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       const order = state.orders.find((o) => o.id === orderId);
       if (!order) return state;
       if (order.status === "picked") return state;
+      const newTotalFee = order.totalFee + overtimeFee;
+      const unpaid = Math.max(0, newTotalFee - order.paidAmount);
+      const settledAmount = unpaid;
       const updatedOrder: StorageOrder = {
         ...order,
         status: "picked",
         overtimeFee: order.overtimeFee + overtimeFee,
-        totalFee: order.totalFee + overtimeFee,
-        paidAmount: order.paidAmount + overtimeFee,
+        totalFee: newTotalFee,
+        paidAmount: order.paidAmount + settledAmount,
         pickedAt: new Date().toISOString(),
         pickedBy: state.currentUser?.id,
       };

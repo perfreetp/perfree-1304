@@ -5,7 +5,7 @@ import {
   CalendarRange, Download, CheckSquare, ChevronDown, Wallet,
   CircleDollarSign, Clock, Shield, TrendingDown, TrendingUp,
   Eye, FileText, Receipt, BadgePercent, ShieldAlert, MapPin, X,
-  Search,
+  Search, AlertTriangle, CheckCircle2, AlertOctagon,
 } from "lucide-react";
 import { clsx } from "clsx";
 import KpiCard from "@/components/KpiCard";
@@ -125,6 +125,7 @@ export default function Settlement() {
         insuranceFee: order.insuranceFee, discount: order.discount,
         totalFee: order.totalFee, paidAmount: order.paidAmount,
         pendingAmount: order.totalFee - order.paidAmount, reconStatus,
+        checkedInAt: order.checkedInAt, pickedAt: order.pickedAt,
       };
     }).filter(row => {
       if (filterOrderId && row.orderNo !== filterOrderId && row.id !== filterOrderId) return false;
@@ -139,6 +140,46 @@ export default function Settlement() {
       return true;
     });
   }, [orders, financeRecords, reconFilter, reconZone, reconSearch, filterOrderId]);
+
+  const dailyClose = useMemo(() => {
+    type Key = string;
+    const m = new Map<Key, {
+      date: string; zoneId: string; zoneName: string;
+      storedOrders: number; unsettledOrders: number; unsettledAmount: number;
+      collectedOrders: number; collectedAmount: number;
+      pickedOrders: number; pickedIncome: number;
+      totalIncome: number;
+    }>();
+    reconRows.forEach(row => {
+      const date = format(new Date(row.checkedInAt), "yyyy-MM-dd");
+      const key = `${date}__${row.zoneId}`;
+      if (!m.has(key)) {
+        m.set(key, {
+          date, zoneId: row.zoneId, zoneName: row.zoneName,
+          storedOrders: 0, unsettledOrders: 0, unsettledAmount: 0,
+          collectedOrders: 0, collectedAmount: 0,
+          pickedOrders: 0, pickedIncome: 0, totalIncome: 0,
+        });
+      }
+      const d = m.get(key)!;
+      if (row.reconStatus === "unsettled") {
+        d.unsettledOrders += 1;
+        d.unsettledAmount += row.pendingAmount;
+      } else if (row.reconStatus === "collected") {
+        d.collectedOrders += 1;
+        d.collectedAmount += row.overtimeFee;
+        d.totalIncome += row.paidAmount;
+      } else if (row.reconStatus === "picked") {
+        d.pickedOrders += 1;
+        d.pickedIncome += row.paidAmount;
+        d.totalIncome += row.paidAmount;
+      } else {
+        d.storedOrders += 1;
+        d.totalIncome += row.paidAmount;
+      }
+    });
+    return Array.from(m.values()).sort((a, b) => b.date.localeCompare(a.date) || a.zoneName.localeCompare(b.zoneName));
+  }, [reconRows]);
 
   const selectedOrder = selectedOrderId ? orders.find(o => o.id === selectedOrderId) ?? null : null;
   const selectedOrderRecords = selectedOrderId ? financeRecords.filter(r => r.orderId === selectedOrderId) : [];
@@ -342,6 +383,57 @@ export default function Settlement() {
                   <X className="w-3 h-3" />清除筛选
                 </button>
               )}
+              <div className="ml-auto flex items-center gap-2">
+                <button className="btn-secondary text-xs !py-1.5 !px-3"><Download className="w-3.5 h-3.5" />导出关账单</button>
+                <button className="btn-primary text-xs !py-1.5 !px-3"><CheckSquare className="w-3.5 h-3.5" />关账确认</button>
+              </div>
+            </div>
+
+            <div className="px-5 py-4 bg-slate-50/60 border-b border-slate-100">
+              <div className="text-xs font-semibold text-navy-800 mb-3 flex items-center gap-2">
+                <FileText className="w-3.5 h-3.5 text-blue-500" />每日关账单汇总（按门店+日期）
+              </div>
+              <div className="overflow-x-auto">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>日期</th><th>门店</th><th>在寄存</th><th>未结清</th><th>未结金额</th>
+                      <th>已补收</th><th>补收金额</th><th>已取件</th><th>取件收入</th><th>本日实收</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyClose.map(r => (
+                      <tr key={`${r.date}-${r.zoneId}`}>
+                        <td className="tabular-nums text-navy-800 font-medium">{r.date}</td>
+                        <td className="text-navy-800">{r.zoneName}</td>
+                        <td className="tabular-nums"><span className="tag-info">{r.storedOrders}单</span></td>
+                        <td className="tabular-nums">
+                          {r.unsettledOrders > 0 ? <span className="tag-danger">{r.unsettledOrders}单</span> : <span className="text-slate-400">0</span>}
+                        </td>
+                        <td className={clsx("tabular-nums font-semibold", r.unsettledAmount > 0 ? "text-rose-600" : "text-slate-400")}>
+                          {r.unsettledAmount > 0 ? fmtRMB(r.unsettledAmount) : "¥0"}
+                        </td>
+                        <td className="tabular-nums">
+                          {r.collectedOrders > 0 ? <span className="tag-warning">{r.collectedOrders}单</span> : <span className="text-slate-400">0</span>}
+                        </td>
+                        <td className={clsx("tabular-nums font-semibold", r.collectedAmount > 0 ? "text-amber-600" : "text-slate-400")}>
+                          {r.collectedAmount > 0 ? fmtRMB(r.collectedAmount) : "¥0"}
+                        </td>
+                        <td className="tabular-nums">
+                          {r.pickedOrders > 0 ? <span className="tag-success">{r.pickedOrders}单</span> : <span className="text-slate-400">0</span>}
+                        </td>
+                        <td className="tabular-nums text-emerald-600 font-medium">{fmtRMB(r.pickedIncome)}</td>
+                        <td className="tabular-nums text-navy-800 font-semibold">{fmtRMB(r.totalIncome)}</td>
+                      </tr>
+                    ))}
+                    {!dailyClose.length && <tr><td colSpan={10} className="text-center text-sm text-slate-400 py-6">暂无关账数据</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="px-5 py-3 border-b border-slate-100 text-xs font-semibold text-navy-800 flex items-center gap-2">
+              <Receipt className="w-3.5 h-3.5 text-violet-500" />订单明细（共 {reconRows.length} 条）
             </div>
             <div className="overflow-x-auto">
               <table className="data-table">
@@ -354,7 +446,9 @@ export default function Settlement() {
                 <tbody>
                   {reconRows.map(r => (
                     <tr key={r.id}>
-                      <td className="font-mono text-xs text-navy-700 font-medium">{r.orderNo}</td>
+                      <td className="font-mono text-xs text-navy-700 font-medium">
+                        <button className="hover:text-blue-600 hover:underline" onClick={() => openOrderDrawer(r.id)}>{r.orderNo}</button>
+                      </td>
                       <td className="text-navy-800">{r.customerName}</td>
                       <td className="text-xs text-slate-600">{r.customerPhone}</td>
                       <td className="text-navy-800">{r.zoneName}</td>
@@ -375,7 +469,11 @@ export default function Settlement() {
                         r.reconStatus === "collected" ? "已补收" :
                         r.reconStatus === "picked" ? "已取件" : "正常"
                       }</span></td>
-                      <td><button className="text-xs text-blue-600 hover:text-blue-700 font-medium inline-flex items-center gap-1" onClick={() => openOrderDrawer(r.id)}><Eye className="w-3 h-3" />查看流水</button></td>
+                      <td className="flex items-center gap-2">
+                        <button className="text-xs text-blue-600 hover:text-blue-700 font-medium inline-flex items-center gap-1" onClick={() => openOrderDrawer(r.id)}>
+                          <Eye className="w-3 h-3" />流水
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {!reconRows.length && <tr><td colSpan={14} className="text-center text-sm text-slate-400 py-8">暂无对账记录</td></tr>}

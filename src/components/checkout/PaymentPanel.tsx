@@ -12,6 +12,7 @@ import {
 import { format, differenceInMinutes } from "date-fns";
 import { clsx } from "clsx";
 import type { StorageOrder } from "@/types";
+import { useAppStore } from "@/store";
 
 type PayKey = "wechat" | "alipay" | "cash";
 
@@ -20,6 +21,11 @@ function formatDuration(minutes: number) {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return m > 0 ? `${h} 小时 ${m} 分` : `${h} 小时`;
+}
+
+function calcOvertimeFee(minutes: number, step: number, unitPrice: number) {
+  if (minutes <= 0 || step <= 0 || unitPrice <= 0) return 0;
+  return Math.ceil(minutes / step) * unitPrice;
 }
 
 const paymentStyles: Record<PayKey, { active: string; icon: string; text: string; label: string; Icon: typeof Wallet }> = {
@@ -35,7 +41,13 @@ export default function PaymentPanel({
   order: StorageOrder | null;
   onConfirm: () => void;
 }) {
+  const zones = useAppStore((s) => s.zones);
   const [method, setMethod] = useState<PayKey>("wechat");
+
+  const pricing = useMemo(() => {
+    if (!order) return null;
+    return zones.find((z) => z.id === order.zoneId)?.pricingRule ?? null;
+  }, [order, zones]);
 
   const duration = useMemo(() => {
     if (!order) return { stored: 0, overtime: 0 };
@@ -51,8 +63,10 @@ export default function PaymentPanel({
 
   const liveOvertimeFee = useMemo(() => {
     if (!order) return 0;
-    return order.overtimeFee + Math.max(0, duration.overtime > 0 ? Math.ceil(duration.overtime / 30) * 5 : 0);
-  }, [order, duration.overtime]);
+    const step = pricing?.overtimeStepMinutes ?? 30;
+    const unit = pricing?.overtimeUnitPrice ?? 5;
+    return order.overtimeFee + calcOvertimeFee(duration.overtime, step, unit);
+  }, [order, duration.overtime, pricing]);
 
   const unpaid = order ? Math.max(0, order.baseFee + liveOvertimeFee + order.insuranceFee - order.discount - order.paidAmount) : 0;
 

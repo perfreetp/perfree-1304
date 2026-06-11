@@ -59,31 +59,69 @@ export default function CheckOut() {
 
     try {
       const order = selectedOrder;
+      const stateSnap = useAppStore.getState();
+      const zone = stateSnap.zones.find((z) => z.id === order.zoneId);
+      const step = zone?.pricingRule.overtimeStepMinutes ?? 30;
+      const unit = zone?.pricingRule.overtimeUnitPrice ?? 5;
       const now = Date.now();
       const refTime = order.estimatedPickupAt
         ? new Date(order.estimatedPickupAt).getTime()
         : new Date(order.checkedInAt).getTime();
       const overtimeMinutes = Math.max(0, Math.floor((now - refTime) / 60000));
-      const additionalOvertimeFee = overtimeMinutes > 0 ? Math.ceil(overtimeMinutes / 30) * 5 : 0;
+      const additionalOvertimeFee = overtimeMinutes > 0 ? Math.ceil(overtimeMinutes / step) * unit : 0;
 
       const newTotalFee = order.baseFee + order.overtimeFee + additionalOvertimeFee + order.insuranceFee - order.discount;
-      const unpaid = Math.max(0, newTotalFee - order.paidAmount);
+      const totalUnpaid = Math.max(0, newTotalFee - order.paidAmount);
+      const historicalUnpaid = Math.max(0, (order.baseFee + order.overtimeFee + order.insuranceFee - order.discount) - order.paidAmount);
+      const newOvertimeOnly = totalUnpaid - historicalUnpaid;
 
       const records: FinanceRecord[] = [];
-      if (unpaid > 0) {
-        records.push({
-          id: uid("fin"),
-          orderId: order.id,
-          orderNo: order.orderNo,
-          zoneId: order.zoneId,
-          type: "overtime_fee",
-          amount: unpaid,
-          direction: "income",
-          method: "wechat",
-          operatorId: currentUser?.id || "",
-          happenedAt: new Date().toISOString(),
-          remark: `超时${overtimeMinutes}分钟补收`,
-        });
+      if (totalUnpaid > 0) {
+        if (historicalUnpaid > 0) {
+          records.push({
+            id: uid("fin"),
+            orderId: order.id,
+            orderNo: order.orderNo,
+            zoneId: order.zoneId,
+            type: "storage_fee",
+            amount: historicalUnpaid,
+            direction: "income",
+            method: "wechat",
+            operatorId: currentUser?.id || "",
+            happenedAt: new Date().toISOString(),
+            remark: "取件时结清历史未付寄存费",
+          });
+        }
+        if (newOvertimeOnly > 0) {
+          records.push({
+            id: uid("fin"),
+            orderId: order.id,
+            orderNo: order.orderNo,
+            zoneId: order.zoneId,
+            type: "overtime_fee",
+            amount: newOvertimeOnly,
+            direction: "income",
+            method: "wechat",
+            operatorId: currentUser?.id || "",
+            happenedAt: new Date().toISOString(),
+            remark: `超时${overtimeMinutes}分钟补收`,
+          });
+        }
+        if (records.length === 0) {
+          records.push({
+            id: uid("fin"),
+            orderId: order.id,
+            orderNo: order.orderNo,
+            zoneId: order.zoneId,
+            type: "overtime_fee",
+            amount: totalUnpaid,
+            direction: "income",
+            method: "wechat",
+            operatorId: currentUser?.id || "",
+            happenedAt: new Date().toISOString(),
+            remark: overtimeMinutes > 0 ? `超时${overtimeMinutes}分钟补收` : "取件结清尾款",
+          });
+        }
       }
 
       useAppStore.getState().checkOutOrder(order.id, additionalOvertimeFee, records);

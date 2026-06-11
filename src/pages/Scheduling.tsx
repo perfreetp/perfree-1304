@@ -4,13 +4,13 @@ import { zhCN } from "date-fns/locale";
 import {
   ChevronLeft, ChevronRight, Plus, HandCoins, Users, Clock,
   AlertTriangle, ClipboardList, CheckCircle2, CalendarClock,
-  Archive, ArrowRight,
+  Archive, ArrowRight, Eye, Package, AlertOctagon, CircleDollarSign,
 } from "lucide-react";
 import { clsx } from "clsx";
 import KpiCard from "@/components/KpiCard";
 import { Modal } from "@/components/Tooltip";
 import { useAppStore } from "@/store";
-import { Shift, ShiftType, HandoverRecord, Staff, LockerStatus } from "@/types";
+import { Shift, ShiftType, HandoverRecord, Staff, LockerStatus, StorageOrder } from "@/types";
 import { uid } from "@/lib/utils";
 
 const shiftMeta: Record<ShiftType, { label: string; cls: string; start: string; end: string }> = {
@@ -25,7 +25,7 @@ interface HandoverFormModalProps {
 }
 
 function HandoverFormModal({ open, onClose }: HandoverFormModalProps) {
-  const { zones, staff, lockers, currentUser, addHandover } = useAppStore();
+  const { zones, staff, lockers, currentUser, addHandover, orders, incidents } = useAppStore();
 
   const [zoneId, setZoneId] = useState<string>(zones[0]?.id || "");
   const [previousStaffId, setPreviousStaffId] = useState<string>(currentUser?.id || "");
@@ -39,21 +39,49 @@ function HandoverFormModal({ open, onClose }: HandoverFormModalProps) {
       setZoneId(zones[0]?.id || "");
       setPreviousStaffId(currentUser?.id || "");
       setNextStaffId("");
-      setAbnormalCount(0);
       setRemark("");
     }
   }, [open, zones, currentUser]);
+
+  const pendingOrders = useMemo((): StorageOrder[] => {
+    if (!zoneId) return [];
+    return orders.filter(
+      (o) => o.zoneId === zoneId && o.status !== "picked" && o.status !== "refunded"
+    );
+  }, [orders, zoneId]);
+
+  const overtimeOrders = useMemo(() => {
+    const now = Date.now();
+    return pendingOrders.filter((o) => {
+      if (o.status === "overtime") return true;
+      if (o.estimatedPickupAt && now > new Date(o.estimatedPickupAt).getTime()) return true;
+      return false;
+    });
+  }, [pendingOrders]);
+
+  const unsettledOrders = useMemo(
+    () => pendingOrders.filter((o) => o.paidAmount < o.totalFee),
+    [pendingOrders]
+  );
+
+  const abnormalOrders = useMemo(() => {
+    const ids = new Set(incidents.filter((i) => i.orderId).map((i) => i.orderId!));
+    return pendingOrders.filter((o) => ids.has(o.id));
+  }, [pendingOrders, incidents]);
 
   useEffect(() => {
     if (zoneId) {
       const count = lockers.filter((l) => l.zoneId === zoneId && l.status === "occupied").length;
       setStoredCountOnShift(count);
+      setAbnormalCount(abnormalOrders.length);
     } else {
       setStoredCountOnShift(0);
+      setAbnormalCount(0);
     }
-  }, [zoneId, lockers]);
+  }, [zoneId, lockers, abnormalOrders]);
 
   const getStaffName = (id: string) => staff.find((s) => s.id === id)?.name || "";
+  const fmtRMB = (n: number) => `¥${n.toFixed(0)}`;
 
   const handleSubmit = () => {
     if (!zoneId || !previousStaffId || !nextStaffId) {
@@ -73,6 +101,13 @@ function HandoverFormModal({ open, onClose }: HandoverFormModalProps) {
       .filter((l) => l.zoneId === zoneId)
       .map((l) => ({ lockerId: l.id, status: l.status as LockerStatus }));
 
+    const pendingSummary = [
+      `在存${pendingOrders.length}单`,
+      overtimeOrders.length > 0 ? `超时${overtimeOrders.length}单` : null,
+      unsettledOrders.length > 0 ? `待补收${unsettledOrders.length}单` : null,
+      abnormalOrders.length > 0 ? `关联异常${abnormalOrders.length}单` : null,
+    ].filter(Boolean).join("；");
+
     const record: HandoverRecord = {
       id: uid("hd"),
       zoneId,
@@ -85,12 +120,37 @@ function HandoverFormModal({ open, onClose }: HandoverFormModalProps) {
       handoverAt: new Date().toISOString(),
       previousSignature: getStaffName(previousStaffId),
       nextSignature: getStaffName(nextStaffId),
-      remark: remark || undefined,
+      remark: [remark, pendingSummary].filter(Boolean).join(" | ") || undefined,
     };
 
     addHandover(record);
     onClose();
     alert("交接已记录");
+  };
+
+  const renderOrderRow = (o: StorageOrder) => {
+    const pending = o.totalFee - o.paidAmount;
+    const isOvertime = overtimeOrders.some((x) => x.id === o.id);
+    const isUnsettled = pending > 0;
+    const isAbnormal = abnormalOrders.some((x) => x.id === o.id);
+    return (
+      <tr key={o.id}>
+        <td className="font-mono text-xs text-navy-700 font-medium">{o.orderNo}</td>
+        <td className="text-navy-800 text-xs">{o.customerName}</td>
+        <td className="text-xs text-slate-600">{o.lockerIds.length}</td>
+        <td className="tabular-nums text-xs">{format(new Date(o.checkedInAt), "HH:mm")}</td>
+        <td className="tabular-nums text-xs font-medium text-navy-800">{fmtRMB(o.totalFee)}</td>
+        <td className={clsx("tabular-nums text-xs font-semibold", isUnsettled ? "text-rose-600" : "text-emerald-600")}>
+          {isUnsettled ? fmtRMB(pending) : "¥0"}
+        </td>
+        <td className="flex flex-wrap gap-1">
+          {isOvertime && <span className="tag-warning text-[10px] !py-0 !px-1.5">超时</span>}
+          {isUnsettled && <span className="tag-danger text-[10px] !py-0 !px-1.5">待补收</span>}
+          {isAbnormal && <span className="tag-info text-[10px] !py-0 !px-1.5">关联异常</span>}
+          {!isOvertime && !isUnsettled && !isAbnormal && <span className="tag-success text-[10px] !py-0 !px-1.5">正常</span>}
+        </td>
+      </tr>
+    );
   };
 
   return (
@@ -105,68 +165,125 @@ function HandoverFormModal({ open, onClose }: HandoverFormModalProps) {
         </>
       }
     >
-      <div className="space-y-4">
-        <div>
-          <label className="label">寄存区 <span className="text-rose-500">*</span></label>
-          <select className="input-base" value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
-            <option value="">请选择寄存区</option>
-            {zones.map((z) => (
-              <option key={z.id} value={z.id}>{z.name}</option>
-            ))}
-          </select>
+      <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+        <div className="grid grid-cols-4 gap-2">
+          <div className="bg-blue-50 rounded-lg p-3 ring-1 ring-blue-100">
+            <div className="flex items-center gap-1 text-[11px] text-blue-600 mb-1">
+              <Package className="w-3.5 h-3.5" />在寄存
+            </div>
+            <div className="text-lg font-bold text-navy-900 font-display tabular-nums">{pendingOrders.length}</div>
+          </div>
+          <div className="bg-amber-50 rounded-lg p-3 ring-1 ring-amber-100">
+            <div className="flex items-center gap-1 text-[11px] text-amber-600 mb-1">
+              <Clock className="w-3.5 h-3.5" />已超时
+            </div>
+            <div className="text-lg font-bold text-amber-700 font-display tabular-nums">{overtimeOrders.length}</div>
+          </div>
+          <div className="bg-rose-50 rounded-lg p-3 ring-1 ring-rose-100">
+            <div className="flex items-center gap-1 text-[11px] text-rose-600 mb-1">
+              <CircleDollarSign className="w-3.5 h-3.5" />待补收
+            </div>
+            <div className="text-lg font-bold text-rose-600 font-display tabular-nums">{unsettledOrders.length}</div>
+          </div>
+          <div className="bg-sky-50 rounded-lg p-3 ring-1 ring-sky-100">
+            <div className="flex items-center gap-1 text-[11px] text-sky-600 mb-1">
+              <AlertOctagon className="w-3.5 h-3.5" />关联异常
+            </div>
+            <div className="text-lg font-bold text-sky-700 font-display tabular-nums">{abnormalOrders.length}</div>
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+
+        {(pendingOrders.length > 0) && (
+          <div className="border border-amber-200 bg-amber-50/60 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              交班时请接班人确认以上未结订单。超时订单需尽快联系客户处理，待补收订单取件时优先结算。
+            </div>
+          </div>
+        )}
+
+        {pendingOrders.length > 0 ? (
+          <div className="border border-slate-100 rounded-lg overflow-hidden">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>订单号</th><th>客户</th><th>柜位</th><th>入库</th>
+                  <th>总额</th><th>待付</th><th>状态</th>
+                </tr>
+              </thead>
+              <tbody>{pendingOrders.map(renderOrderRow)}</tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-center text-xs text-slate-400 py-6 flex flex-col items-center gap-2">
+            <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+            该寄存区暂无未结订单
+          </div>
+        )}
+
+        <div className="border-t border-slate-100 pt-4">
           <div>
-            <label className="label">交班人 <span className="text-rose-500">*</span></label>
-            <select className="input-base" value={previousStaffId} onChange={(e) => setPreviousStaffId(e.target.value)}>
-              <option value="">请选择交班人</option>
-              {staff.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
+            <label className="label">寄存区 <span className="text-rose-500">*</span></label>
+            <select className="input-base" value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
+              <option value="">请选择寄存区</option>
+              {zones.map((z) => (
+                <option key={z.id} value={z.id}>{z.name}</option>
               ))}
             </select>
           </div>
-          <div>
-            <label className="label">接班人 <span className="text-rose-500">*</span></label>
-            <select className="input-base" value={nextStaffId} onChange={(e) => setNextStaffId(e.target.value)}>
-              <option value="">请选择接班人</option>
-              {staff
-                .filter((s) => s.id !== previousStaffId)
-                .map((s) => (
+          <div className="grid grid-cols-2 gap-4 mt-3">
+            <div>
+              <label className="label">交班人 <span className="text-rose-500">*</span></label>
+              <select className="input-base" value={previousStaffId} onChange={(e) => setPreviousStaffId(e.target.value)}>
+                <option value="">请选择交班人</option>
+                {staff.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
-            </select>
+              </select>
+            </div>
+            <div>
+              <label className="label">接班人 <span className="text-rose-500">*</span></label>
+              <select className="input-base" value={nextStaffId} onChange={(e) => setNextStaffId(e.target.value)}>
+                <option value="">请选择接班人</option>
+                {staff
+                  .filter((s) => s.id !== previousStaffId)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+              </select>
+            </div>
           </div>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="label">在存件数 <span className="text-rose-500">*</span></label>
-            <input
-              type="number"
-              className="input-base"
-              min={0}
-              value={storedCountOnShift}
-              onChange={(e) => setStoredCountOnShift(Number(e.target.value))}
+          <div className="grid grid-cols-2 gap-4 mt-3">
+            <div>
+              <label className="label">在存件数 <span className="text-rose-500">*</span></label>
+              <input
+                type="number"
+                className="input-base"
+                min={0}
+                value={storedCountOnShift}
+                onChange={(e) => setStoredCountOnShift(Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label className="label">异常件数 <span className="text-rose-500">*</span></label>
+              <input
+                type="number"
+                className="input-base"
+                min={0}
+                value={abnormalCount}
+                onChange={(e) => setAbnormalCount(Number(e.target.value))}
+              />
+            </div>
+          </div>
+          <div className="mt-3">
+            <label className="label">备注</label>
+            <textarea
+              className="input-base min-h-[64px] resize-y"
+              placeholder="其他需要交接的情况..."
+              value={remark}
+              onChange={(e) => setRemark(e.target.value)}
             />
           </div>
-          <div>
-            <label className="label">异常件数 <span className="text-rose-500">*</span></label>
-            <input
-              type="number"
-              className="input-base"
-              min={0}
-              value={abnormalCount}
-              onChange={(e) => setAbnormalCount(Number(e.target.value))}
-            />
-          </div>
-        </div>
-        <div>
-          <label className="label">备注</label>
-          <textarea
-            className="input-base min-h-[80px] resize-y"
-            placeholder="如有异常情况请在此说明..."
-            value={remark}
-            onChange={(e) => setRemark(e.target.value)}
-          />
         </div>
       </div>
     </Modal>
