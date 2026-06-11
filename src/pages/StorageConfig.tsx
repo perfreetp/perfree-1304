@@ -484,7 +484,6 @@ function ZoneFormModal({ mode, initialZone, onClose }: ZoneFormModalProps) {
     initialZone?.bannedItems.join("\n") ?? ""
   );
 
-  const [totalLockers, setTotalLockers] = useState(initialZone?.totalLockers ?? 30);
   const [rows, setRows] = useState(5);
   const [cols, setCols] = useState(6);
 
@@ -494,9 +493,6 @@ function ZoneFormModal({ mode, initialZone, onClose }: ZoneFormModalProps) {
     const newErrors: Record<string, string> = {};
     if (!name.trim()) newErrors.name = "请输入寄存区名称";
     if (!location.trim()) newErrors.location = "请输入所在位置";
-    if (mode === "create" && (!totalLockers || totalLockers <= 0)) {
-      newErrors.totalLockers = "柜位总数必须大于0";
-    }
     if (capacityWarning < 1 || capacityWarning > 100) {
       newErrors.capacityWarning = "预警阈值需在 1-100 之间";
     }
@@ -716,43 +712,30 @@ function ZoneFormModal({ mode, initialZone, onClose }: ZoneFormModalProps) {
               </h4>
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="label">柜位总数 <span className="text-rose-500">*</span></label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={totalLockers}
-                    onChange={(e) => setTotalLockers(Number(e.target.value))}
-                    className={clsx("input-base", errors.totalLockers && "ring-2 ring-rose-200 border-rose-300")}
-                  />
-                  {errors.totalLockers && <p className="text-xs text-rose-500 mt-1">{errors.totalLockers}</p>}
-                </div>
-                <div>
-                  <label className="label">行数（可选）</label>
+                  <label className="label">行数</label>
                   <input
                     type="number"
                     min={1}
                     value={rows}
-                    onChange={(e) => {
-                      const r = Math.max(1, Number(e.target.value));
-                      setRows(r);
-                      setTotalLockers(r * cols);
-                    }}
+                    onChange={(e) => setRows(Math.max(1, Number(e.target.value)))}
                     className="input-base"
                   />
                 </div>
                 <div>
-                  <label className="label">列数（可选）</label>
+                  <label className="label">列数</label>
                   <input
                     type="number"
                     min={1}
                     value={cols}
-                    onChange={(e) => {
-                      const c = Math.max(1, Number(e.target.value));
-                      setCols(c);
-                      setTotalLockers(rows * c);
-                    }}
+                    onChange={(e) => setCols(Math.max(1, Number(e.target.value)))}
                     className="input-base"
                   />
+                </div>
+                <div>
+                  <label className="label">柜位总数</label>
+                  <div className="input-base bg-slate-50 text-slate-700 font-semibold tabular-nums">
+                    {rows * cols}
+                  </div>
                 </div>
               </div>
               <p className="text-xs text-slate-500 mt-2">

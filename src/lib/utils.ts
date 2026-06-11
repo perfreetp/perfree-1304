@@ -12,14 +12,26 @@ export function uid(prefix?: string): string {
 }
 
 let orderCounter = 0;
-export function genOrderNo(): string {
+
+function extractSeq(orderNo: string): number {
+  const m = orderNo.match(/LC\d{8}(\d{4})$/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+export function genOrderNo(existingOrderNos: string[] = []): string {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  orderCounter = (orderCounter + 1) % 10000;
-  const seq = String(orderCounter).padStart(4, "0");
-  return `LC${year}${month}${day}${seq}`;
+  const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const prefix = `LC${datePart}`;
+  let maxSeq = orderCounter;
+  for (const no of existingOrderNos) {
+    if (no.startsWith(prefix)) {
+      const seq = extractSeq(no);
+      if (seq > maxSeq) maxSeq = seq;
+    }
+  }
+  const nextSeq = (maxSeq + 1) % 10000;
+  orderCounter = nextSeq;
+  return `${prefix}${String(nextSeq).padStart(4, "0")}`;
 }
 
 export function differenceInMinutesNow(iso: string): number {

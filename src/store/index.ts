@@ -228,8 +228,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   createZone: (zone, lockers) => {
+    const safeZone = { ...zone, totalLockers: lockers.length };
     set((state) => ({
-      zones: [...state.zones, zone],
+      zones: [...state.zones, safeZone],
       lockers: [...state.lockers, ...lockers],
     }));
     persistState(get());

@@ -5,15 +5,16 @@ import {
   CalendarRange, Download, CheckSquare, ChevronDown, Wallet,
   CircleDollarSign, Clock, Shield, TrendingDown, TrendingUp,
   Eye, FileText, Receipt, BadgePercent, ShieldAlert, MapPin, X,
+  Search,
 } from "lucide-react";
 import { clsx } from "clsx";
 import KpiCard from "@/components/KpiCard";
 import { Drawer } from "@/components/Tooltip";
 import { useAppStore } from "@/store";
-import { FinanceRecord, Incident } from "@/types";
+import { FinanceRecord, Incident, StorageOrder } from "@/types";
 
 type RangeKey = "7d" | "today" | "month" | "custom";
-type TabKey = "daily" | "zone" | "discount" | "compensation";
+type TabKey = "daily" | "zone" | "discount" | "compensation" | "reconciliation";
 
 const rangeLabels: Record<RangeKey, string> = { "7d": "近7日", today: "今日", month: "本月", custom: "自定义" };
 const fmtRMB = (n: number) => `¥${n.toLocaleString("zh-CN", { minimumFractionDigits: 0 })}`;
@@ -22,12 +23,18 @@ const incTypeMap: Record<string, string> = { lost: "遗失", damaged: "破损", 
 const incStatusMap: Record<string, string> = { pending: "驳回", processing: "驳回", approving: "待批", resolved: "已付", closed: "已付" };
 
 export default function Settlement() {
-  const { financeRecords, staff, zones, incidents } = useAppStore();
+  const { financeRecords, staff, zones, incidents, orders } = useAppStore();
   const [rangeKey, setRangeKey] = useState<RangeKey>("7d");
   const [zoneFilter, setZoneFilter] = useState("all");
   const [activeTab, setActiveTab] = useState<TabKey>("daily");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerRecord, setDrawerRecord] = useState<FinanceRecord | null>(null);
+  const [reconFilter, setReconFilter] = useState("all");
+  const [reconZone, setReconZone] = useState("all");
+  const [reconSearch, setReconSearch] = useState("");
+  const [filterOrderId, setFilterOrderId] = useState<string | null>(null);
+  const [orderDrawerOpen, setOrderDrawerOpen] = useState(false);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
 
   const getStaffName = (id: string) => staff.find(s => s.id === id)?.name || "-";
   const getZoneName = (id: string) => zones.find(z => z.id === id)?.name || "-";
@@ -99,6 +106,50 @@ export default function Settlement() {
       approver: i.approver || "-", status: incStatusMap[i.status] || "待批",
     })), [incidents]);
 
+  const reconRows = useMemo(() => {
+    const overtimeOrderIds = new Set(
+      financeRecords.filter(r => r.type === "overtime_fee" && r.orderId).map(r => r.orderId!)
+    );
+    return orders.map(order => {
+      const hasOvertime = overtimeOrderIds.has(order.id);
+      let reconStatus: string;
+      if (order.paidAmount < order.totalFee) reconStatus = "unsettled";
+      else if (hasOvertime) reconStatus = "collected";
+      else if (order.status === "picked") reconStatus = "picked";
+      else reconStatus = "normal";
+      return {
+        id: order.id, orderNo: order.orderNo, customerName: order.customerName,
+        customerPhone: order.customerPhone, zoneId: order.zoneId,
+        zoneName: getZoneName(order.zoneId), lockerCount: order.lockerIds.length,
+        baseFee: order.baseFee, overtimeFee: order.overtimeFee,
+        insuranceFee: order.insuranceFee, discount: order.discount,
+        totalFee: order.totalFee, paidAmount: order.paidAmount,
+        pendingAmount: order.totalFee - order.paidAmount, reconStatus,
+      };
+    }).filter(row => {
+      if (filterOrderId && row.orderNo !== filterOrderId && row.id !== filterOrderId) return false;
+      if (reconFilter === "unsettled" && row.reconStatus !== "unsettled") return false;
+      if (reconFilter === "collected" && row.reconStatus !== "collected") return false;
+      if (reconFilter === "picked" && row.reconStatus !== "picked") return false;
+      if (reconZone !== "all" && row.zoneId !== reconZone) return false;
+      if (reconSearch) {
+        const s = reconSearch.toLowerCase();
+        if (!row.orderNo.toLowerCase().includes(s) && !row.customerName.toLowerCase().includes(s)) return false;
+      }
+      return true;
+    });
+  }, [orders, financeRecords, reconFilter, reconZone, reconSearch, filterOrderId]);
+
+  const selectedOrder = selectedOrderId ? orders.find(o => o.id === selectedOrderId) ?? null : null;
+  const selectedOrderRecords = selectedOrderId ? financeRecords.filter(r => r.orderId === selectedOrderId) : [];
+
+  const handleOrderNoClick = (orderNo: string) => {
+    setFilterOrderId(orderNo);
+    setActiveTab("reconciliation");
+  };
+  const openOrderDrawer = (orderId: string) => { setSelectedOrderId(orderId); setOrderDrawerOpen(true); };
+  const closeOrderDrawer = () => { setOrderDrawerOpen(false); setSelectedOrderId(null); };
+
   const openDrawer = (r: FinanceRecord) => { setDrawerRecord(r); setDrawerOpen(true); };
   const closeDrawer = () => { setDrawerOpen(false); setDrawerRecord(null); };
 
@@ -149,7 +200,8 @@ export default function Settlement() {
       <div className="bg-white rounded-xl shadow-card overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-1">
           {[{ k: "daily", l: "日结报表", I: FileText }, { k: "zone", l: "门店分账", I: MapPin },
-            { k: "discount", l: "优惠与抵扣", I: BadgePercent }, { k: "compensation", l: "赔付台账", I: ShieldAlert }].map(t => (
+            { k: "discount", l: "优惠与抵扣", I: BadgePercent }, { k: "compensation", l: "赔付台账", I: ShieldAlert },
+            { k: "reconciliation", l: "订单对账", I: FileText }].map(t => (
             <button key={t.k} onClick={() => setActiveTab(t.k as TabKey)}
               className={clsx("inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors",
                 activeTab === t.k ? "bg-blue-50 text-blue-700" : "text-slate-500 hover:text-navy-800 hover:bg-slate-50")}>
@@ -256,6 +308,82 @@ export default function Settlement() {
             </table>
           </div>
         )}
+
+        {activeTab === "reconciliation" && (
+          <div>
+            <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-3 flex-wrap">
+              <div className="relative">
+                <select value={reconFilter} onChange={e => { setReconFilter(e.target.value); setFilterOrderId(null); }}
+                  className="appearance-none bg-white border border-slate-200 rounded-lg pl-3 pr-8 py-1.5 text-xs font-medium text-navy-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-50 focus:border-blue-300">
+                  <option value="all">全部状态</option>
+                  <option value="unsettled">未结清</option>
+                  <option value="collected">已补收</option>
+                  <option value="picked">已取件</option>
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+              <div className="relative">
+                <select value={reconZone} onChange={e => { setReconZone(e.target.value); setFilterOrderId(null); }}
+                  className="appearance-none bg-white border border-slate-200 rounded-lg pl-3 pr-8 py-1.5 text-xs font-medium text-navy-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-50 focus:border-blue-300">
+                  <option value="all">全部寄存区</option>
+                  {zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input value={reconSearch} onChange={e => { setReconSearch(e.target.value); setFilterOrderId(null); }}
+                  placeholder="搜索订单号/客户名"
+                  className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-50 focus:border-blue-300 w-48" />
+              </div>
+              {filterOrderId && (
+                <button onClick={() => setFilterOrderId(null)}
+                  className="text-xs text-blue-600 hover:text-blue-700 font-medium inline-flex items-center gap-1">
+                  <X className="w-3 h-3" />清除筛选
+                </button>
+              )}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead><tr>
+                  <th>订单号</th><th>客户姓名</th><th>手机号</th><th>寄存区</th>
+                  <th>柜位数</th><th>寄存费</th><th>超时费</th><th>保价费</th>
+                  <th>折扣</th><th>应收总额</th><th>已收金额</th><th>待付金额</th>
+                  <th>状态</th><th>操作</th>
+                </tr></thead>
+                <tbody>
+                  {reconRows.map(r => (
+                    <tr key={r.id}>
+                      <td className="font-mono text-xs text-navy-700 font-medium">{r.orderNo}</td>
+                      <td className="text-navy-800">{r.customerName}</td>
+                      <td className="text-xs text-slate-600">{r.customerPhone}</td>
+                      <td className="text-navy-800">{r.zoneName}</td>
+                      <td className="tabular-nums">{r.lockerCount}</td>
+                      <td className="tabular-nums">{fmtRMB(r.baseFee)}</td>
+                      <td className="tabular-nums">{fmtRMB(r.overtimeFee)}</td>
+                      <td className="tabular-nums">{fmtRMB(r.insuranceFee)}</td>
+                      <td className="tabular-nums text-rose-600">-{fmtRMB(r.discount)}</td>
+                      <td className="tabular-nums font-medium text-navy-800">{fmtRMB(r.totalFee)}</td>
+                      <td className="tabular-nums text-emerald-600">{fmtRMB(r.paidAmount)}</td>
+                      <td className={clsx("tabular-nums font-semibold", r.pendingAmount > 0 ? "text-rose-600" : "text-emerald-600")}>{fmtRMB(r.pendingAmount)}</td>
+                      <td><span className={
+                        r.reconStatus === "unsettled" ? "tag-danger" :
+                        r.reconStatus === "collected" ? "tag-warning" :
+                        r.reconStatus === "picked" ? "tag-success" : "tag-info"
+                      }>{
+                        r.reconStatus === "unsettled" ? "未结清" :
+                        r.reconStatus === "collected" ? "已补收" :
+                        r.reconStatus === "picked" ? "已取件" : "正常"
+                      }</span></td>
+                      <td><button className="text-xs text-blue-600 hover:text-blue-700 font-medium inline-flex items-center gap-1" onClick={() => openOrderDrawer(r.id)}><Eye className="w-3 h-3" />查看流水</button></td>
+                    </tr>
+                  ))}
+                  {!reconRows.length && <tr><td colSpan={14} className="text-center text-sm text-slate-400 py-8">暂无对账记录</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-card overflow-hidden">
@@ -270,7 +398,7 @@ export default function Settlement() {
               {filteredRecords.slice(0, 8).map(r => (
                 <tr key={r.id} className="cursor-pointer" onClick={() => openDrawer(r)}>
                   <td className="tabular-nums text-xs text-slate-600">{format(new Date(r.happenedAt), "MM-dd HH:mm")}</td>
-                  <td className="font-mono text-xs text-navy-700 font-medium">{r.orderNo || "-"}</td>
+                  <td className="font-mono text-xs text-navy-700 font-medium">{r.orderNo ? <button className="text-blue-600 hover:text-blue-700 hover:underline" onClick={e => { e.stopPropagation(); handleOrderNoClick(r.orderNo!); }}>{r.orderNo}</button> : "-"}</td>
                   <td className="text-sm text-navy-800">{getZoneName(r.zoneId).slice(0, 10)}</td>
                   <td><span className={r.direction === "income" ? "tag-success" : "tag-danger"}>{directionTypeLabel(r)}</span></td>
                   <td className={clsx("tabular-nums font-semibold", r.direction === "income" ? "text-emerald-600" : "text-rose-600")}>
@@ -323,6 +451,59 @@ export default function Settlement() {
             <div className="flex gap-2 pt-2">
               <button className="btn-secondary flex-1" onClick={closeDrawer}><X className="w-4 h-4" />关闭</button>
               <button className="btn-primary flex-1"><Download className="w-4 h-4" />打印凭证</button>
+            </div>
+          </div>
+        )}
+      </Drawer>
+
+      <Drawer open={orderDrawerOpen} onClose={closeOrderDrawer}
+        title={<span className="inline-flex items-center gap-2"><Receipt className="w-4 h-4 text-blue-500" />订单流水明细</span>}>
+        {selectedOrder && (
+          <div className="space-y-5">
+            <div className="p-4 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 ring-1 ring-blue-100">
+              <div className="flex items-center justify-between mb-3">
+                <span className="font-mono text-sm text-navy-800 font-semibold">{selectedOrder.orderNo}</span>
+                <span className={clsx("text-xs px-2 py-0.5 rounded-full font-medium",
+                  selectedOrder.paidAmount < selectedOrder.totalFee ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700")}>
+                  {selectedOrder.paidAmount < selectedOrder.totalFee ? "未结清" : "已结清"}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div><span className="text-slate-500">客户：</span><span className="text-navy-800 font-medium">{selectedOrder.customerName}</span></div>
+                <div><span className="text-slate-500">手机：</span><span className="text-navy-800">{selectedOrder.customerPhone}</span></div>
+                <div><span className="text-slate-500">寄存区：</span><span className="text-navy-800">{getZoneName(selectedOrder.zoneId)}</span></div>
+                <div><span className="text-slate-500">柜位数：</span><span className="text-navy-800">{selectedOrder.lockerIds.length}</span></div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-blue-100 grid grid-cols-3 gap-2 text-center">
+                <div><div className="text-[10px] text-slate-500">应收</div><div className="text-sm font-semibold text-navy-800 tabular-nums">{fmtRMB(selectedOrder.totalFee)}</div></div>
+                <div><div className="text-[10px] text-slate-500">已收</div><div className="text-sm font-semibold text-emerald-600 tabular-nums">{fmtRMB(selectedOrder.paidAmount)}</div></div>
+                <div><div className="text-[10px] text-slate-500">待付</div><div className="text-sm font-semibold text-rose-600 tabular-nums">{fmtRMB(selectedOrder.totalFee - selectedOrder.paidAmount)}</div></div>
+              </div>
+            </div>
+            <div>
+              <h4 className="text-xs font-semibold text-navy-800 mb-2">关联流水（{selectedOrderRecords.length}条）</h4>
+              <div className="space-y-2">
+                {selectedOrderRecords.map(rec => (
+                  <div key={rec.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-100 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className={clsx("px-1.5 py-0.5 rounded text-[10px] font-medium", rec.direction === "income" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700")}>
+                        {directionTypeLabel(rec)}
+                      </span>
+                      <span className="text-slate-600">{format(new Date(rec.happenedAt), "MM-dd HH:mm")}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-slate-500">{methodFull(rec.method)}</span>
+                      <span className={clsx("font-semibold tabular-nums", rec.direction === "income" ? "text-emerald-600" : "text-rose-600")}>
+                        {rec.direction === "income" ? "+" : "-"}{fmtRMB(rec.amount)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                {!selectedOrderRecords.length && <div className="text-center text-xs text-slate-400 py-4">暂无关联流水</div>}
+              </div>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button className="btn-secondary flex-1" onClick={closeOrderDrawer}><X className="w-4 h-4" />关闭</button>
             </div>
           </div>
         )}

@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { format } from "date-fns";
-import { RotateCcw, Save, PackageCheck } from "lucide-react";
+import { RotateCcw, Save, PackageCheck, CheckCircle, X } from "lucide-react";
 import { useAppStore } from "@/store";
+import { genOrderNo, uid as uidUtil } from "@/lib/utils";
 import type {
   LockerSize,
   LuggageType,
@@ -18,10 +19,6 @@ import {
   FeeBreakdown,
 } from "@/components/checkin/RightPanels";
 
-function uid(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-}
-
 export default function CheckIn() {
   const [customerType, setCustomerType] = useState<CustomerType>("individual");
   const [form, setForm] = useState<CheckInForm>({
@@ -37,24 +34,23 @@ export default function CheckIn() {
   });
   const [selectedLockerIds, setSelectedLockerIds] = useState<string[]>([]);
   const [photos, setPhotos] = useState<string[]>([]);
-  const [toast, setToast] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [confirmResult, setConfirmResult] = useState<{
+    orderNo: string;
+    lockerCodes: string[];
+    totalFee: number;
+    baseFee: number;
+    insuranceFee: number;
+    discount: number;
+  } | null>(null);
 
   const activeZone = useAppStore((s) => s.zones.find((z) => z.id === s.activeZoneId));
   const lockers = useAppStore((s) => s.lockers);
   const currentUser = useAppStore((s) => s.currentUser);
+  const existingOrderNos = useAppStore((s) => s.orders.map((o) => o.orderNo));
   const selectedLockers = lockers.filter((l) => selectedLockerIds.includes(l.id));
 
-  const orderNo = useMemo(() => {
-    const d = new Date();
-    return (
-      "LC" +
-      d.getFullYear() +
-      String(d.getMonth() + 1).padStart(2, "0") +
-      String(d.getDate()).padStart(2, "0") +
-      String(Math.floor(Math.random() * 9000) + 1000)
-    );
-  }, []);
+  const orderNo = useMemo(() => genOrderNo(existingOrderNos), [existingOrderNos]);
 
   const pricing = activeZone?.pricingRule;
   const baseFee = useMemo(() => {
@@ -136,7 +132,7 @@ export default function CheckIn() {
     const paidAmount = totalFee;
 
     const luggageTypes: LuggageItem[] = selectedLockerIds.slice(0, luggageCount).map((lockerId) => ({
-      id: uid("lug"),
+      id: uidUtil("lug"),
       type: form.luggageType,
       size: form.size,
       color: form.color,
@@ -145,7 +141,7 @@ export default function CheckIn() {
     }));
 
     const order: StorageOrder = {
-      id: uid("order"),
+      id: uidUtil("order"),
       orderNo,
       zoneId: activeZone.id,
       lockerIds: selectedLockerIds,
@@ -174,7 +170,7 @@ export default function CheckIn() {
     const financeRecords: FinanceRecord[] = [];
 
     financeRecords.push({
-      id: uid("fin"),
+      id: uidUtil("fin"),
       orderId: order.id,
       orderNo: order.orderNo,
       zoneId: activeZone.id,
@@ -188,7 +184,7 @@ export default function CheckIn() {
 
     if (insuranceFee > 0) {
       financeRecords.push({
-        id: uid("fin"),
+        id: uidUtil("fin"),
         orderId: order.id,
         orderNo: order.orderNo,
         zoneId: activeZone.id,
@@ -203,7 +199,7 @@ export default function CheckIn() {
 
     if (discount > 0) {
       financeRecords.push({
-        id: uid("fin"),
+        id: uidUtil("fin"),
         orderId: order.id,
         orderNo: order.orderNo,
         zoneId: activeZone.id,
@@ -219,18 +215,52 @@ export default function CheckIn() {
 
     useAppStore.getState().createOrder(order, financeRecords);
 
-    setToast(`入库成功！订单号 ${orderNo}`);
-    setTimeout(() => {
-      setToast(null);
-      reset();
-    }, 1500);
+    setConfirmResult({
+      orderNo,
+      lockerCodes: selectedLockers.map((l) => l.code),
+      totalFee,
+      baseFee,
+      insuranceFee,
+      discount,
+    });
   };
 
   return (
     <div className="space-y-5 relative">
-      {toast && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-6 py-3 rounded-lg shadow-lg text-sm font-medium animate-fade-in">
-          {toast}
+      {confirmResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-navy-900/40 backdrop-blur-sm animate-fade-in" onClick={() => { setConfirmResult(null); reset(); }} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in">
+            <div className="bg-gradient-to-r from-emerald-600 to-teal-500 px-6 py-5 text-white text-center">
+              <CheckCircle className="w-10 h-10 mx-auto mb-2" />
+              <div className="text-lg font-bold">入库成功</div>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div className="text-center">
+                <div className="text-xs text-slate-500 mb-1">订单号</div>
+                <div className="text-xl font-bold font-mono text-navy-900 tracking-wider">{confirmResult.orderNo}</div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-slate-500 mb-1">柜位</div>
+                  <div className="text-sm font-semibold text-navy-800 font-mono">{confirmResult.lockerCodes.join("、")}</div>
+                </div>
+                <div className="bg-emerald-50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-slate-500 mb-1">应收金额</div>
+                  <div className="text-lg font-bold text-emerald-700">¥{confirmResult.totalFee}</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div><div className="text-slate-400">寄存费</div><div className="font-semibold text-navy-800">¥{confirmResult.baseFee}</div></div>
+                <div><div className="text-slate-400">保价费</div><div className="font-semibold text-navy-800">¥{confirmResult.insuranceFee}</div></div>
+                <div><div className="text-slate-400">折扣</div><div className="font-semibold text-rose-600">-¥{confirmResult.discount}</div></div>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-slate-100 flex gap-3">
+              <button onClick={() => { setConfirmResult(null); reset(); }} className="btn-primary flex-1">继续收件</button>
+              <button onClick={() => setConfirmResult(null)} className="btn-secondary flex-1">关闭</button>
+            </div>
+          </div>
         </div>
       )}
 

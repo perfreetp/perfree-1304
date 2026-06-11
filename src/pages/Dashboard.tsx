@@ -24,6 +24,7 @@ import {
 import { clsx } from "clsx";
 import KpiCard, { KpiIcons } from "@/components/KpiCard";
 import CapacityHeatmap from "@/components/CapacityHeatmap";
+import OrderDetailDrawer from "@/components/OrderDetailDrawer";
 import { useAppStore } from "@/store";
 import { StorageOrder, Incident } from "@/types";
 
@@ -63,6 +64,8 @@ const pieData = [
 
 export default function Dashboard() {
   const [zoneFilter, setZoneFilter] = useState<string>("all");
+  const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   const zones = useAppStore((s) => s.zones);
   const orders = useAppStore((s) => s.orders);
   const incidents = useAppStore((s) => s.incidents);
@@ -220,7 +223,7 @@ export default function Dashboard() {
                 {recentOrders.map((o) => {
                   const st = orderStatusMap[o.status];
                   return (
-                    <tr key={o.id}>
+                    <tr key={o.id} className="cursor-pointer" onClick={() => { setDetailOrderId(o.id); setDetailOpen(true); }}>
                       <td className="font-mono text-xs text-navy-700 font-medium">{o.orderNo}</td>
                       <td className="text-navy-800">{o.customerName}</td>
                       <td>
@@ -307,6 +310,12 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      <OrderDetailDrawer
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        orderId={detailOrderId}
+      />
     </div>
   );
 }

@@ -3,6 +3,7 @@ import type { Locker, LockerSize, LockerStatus } from "@/types";
 import { useAppStore } from "@/store";
 import LockerCell from "@/components/LockerCell";
 import { Drawer } from "@/components/Tooltip";
+import OrderDetailDrawer from "@/components/OrderDetailDrawer";
 import { cn } from "@/lib/utils";
 
 type SizeFilter = "all" | LockerSize;
@@ -66,6 +67,8 @@ export default function LockerManager() {
   const [tab, setTab] = useState<AreaFilter>("A区");
   const [sel, setSel] = useState<Locker | null>(null);
   const [open, setOpen] = useState(false);
+  const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const zl = useMemo(() => lockers.filter((l) => l.zoneId === activeZoneId), [lockers, activeZoneId]);
   const stats = useMemo(() => {
@@ -236,7 +239,13 @@ export default function LockerManager() {
               <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
                 <div className="flex items-center justify-between mb-3">
                   <div className="text-sm font-semibold text-navy-800">关联订单</div>
-                  <span className="tag-info">{order.orderNo}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="tag-info">{order.orderNo}</span>
+                    <button
+                      className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                      onClick={() => { setDetailOrderId(order.id); setDetailOpen(true); }}
+                    >详情</button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
                   <div><span className="text-slate-500 text-xs">客户姓名</span>
@@ -284,6 +293,12 @@ export default function LockerManager() {
           </div>
         )}
       </Drawer>
+
+      <OrderDetailDrawer
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        orderId={detailOrderId}
+      />
     </div>
   );
 }
