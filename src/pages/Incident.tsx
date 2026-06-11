@@ -1,16 +1,17 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
 import {
   AlertTriangle, Clock, ShieldCheck, CheckCircle2, ChevronDown, Plus,
   Calendar as CalendarIcon, User, MapPin, FileText, DollarSign, Eye,
-  Play, Send, CheckSquare, X, Camera, Check,
+  Play, Send, CheckSquare, X, Camera, Check, Upload,
 } from "lucide-react";
 import { format, formatDistanceToNow, isSameMonth, parseISO } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { clsx } from "clsx";
 import { useAppStore } from "@/store";
 import { Incident as IncidentRecord, IncidentStatus, IncidentType } from "@/types";
-import { Drawer } from "@/components/Tooltip";
+import { Drawer, Modal } from "@/components/Tooltip";
 import KpiCard from "@/components/KpiCard";
+import { uid } from "@/lib/utils";
 
 const typeMap: Record<IncidentType, { text: string; cls: string }> = {
   lost: { text: "遗失", cls: "tag-danger" },
@@ -45,6 +46,233 @@ const tabOpt = [
   { value: "approving" as const, label: "待审批" },
   { value: "resolved" as const, label: "已结案" },
 ];
+
+interface IncidentFormModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+function IncidentFormModal({ open, onClose }: IncidentFormModalProps) {
+  const { orders, zones, currentUser } = useAppStore();
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState<IncidentType>("lost");
+  const [zoneId, setZoneId] = useState(zones[0]?.id || "");
+  const [relatedOrderNo, setRelatedOrderNo] = useState("");
+  const [description, setDescription] = useState("");
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [compensationAmount, setCompensationAmount] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const fileInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  const resetForm = () => {
+    setTitle("");
+    setType("lost");
+    setZoneId(zones[0]?.id || "");
+    setRelatedOrderNo("");
+    setDescription("");
+    setPhotos([]);
+    setCompensationAmount("");
+    setErrors({});
+  };
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  const handlePhotoUpload = (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      setPhotos((prev) => {
+        const next = [...prev];
+        next[index] = dataUrl;
+        return next;
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removePhoto = (index: number) => {
+    setPhotos((prev) => {
+      const next = [...prev];
+      next.splice(index, 1);
+      return next;
+    });
+    if (fileInputRefs.current[index]) {
+      fileInputRefs.current[index]!.value = "";
+    }
+  };
+
+  const validate = (): boolean => {
+    const newErrors: Record<string, string> = {};
+    if (!title.trim()) newErrors.title = "请输入事件标题";
+    if (!description.trim()) newErrors.description = "请输入事件描述";
+    if (relatedOrderNo.trim()) {
+      const orderExists = orders.some((o) => o.orderNo === relatedOrderNo.trim());
+      if (!orderExists) newErrors.relatedOrderNo = "该订单号不存在";
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = () => {
+    if (!validate()) return;
+    const matchedOrder = orders.find((o) => o.orderNo === relatedOrderNo.trim());
+    const incident: IncidentRecord = {
+      id: uid("inc"),
+      title: title.trim(),
+      type,
+      status: "pending",
+      zoneId,
+      description: description.trim(),
+      photos: photos.filter(Boolean),
+      reportedBy: currentUser?.id || "",
+      reportedAt: new Date().toISOString(),
+      compensationAmount: compensationAmount ? Number(compensationAmount) : 0,
+      orderId: matchedOrder?.id,
+      orderNo: matchedOrder?.orderNo,
+    };
+    useAppStore.getState().createIncident(incident);
+    alert("已登记");
+    handleClose();
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={handleClose}
+      title="登记新事件"
+      width="max-w-2xl"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={handleClose}>取消</button>
+          <button className="btn-primary" onClick={handleSubmit}>确认登记</button>
+        </>
+      }
+    >
+      <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
+        <div>
+          <div className="label">事件标题 <span className="text-rose-500">*</span></div>
+          <input
+            type="text"
+            className={clsx("input-base", errors.title && "border-rose-400 focus:ring-rose-50 focus:border-rose-400")}
+            placeholder="请简要描述事件，例如：A区3号柜行李箱遗失"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          {errors.title && <div className="text-xs text-rose-500 mt-1">{errors.title}</div>}
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <div className="label">事件类型 <span className="text-rose-500">*</span></div>
+            <select
+              className="input-base"
+              value={type}
+              onChange={(e) => setType(e.target.value as IncidentType)}
+            >
+              <option value="lost">遗失</option>
+              <option value="damaged">破损</option>
+              <option value="complaint">投诉</option>
+              <option value="other">其他</option>
+            </select>
+          </div>
+          <div>
+            <div className="label">寄存区 <span className="text-rose-500">*</span></div>
+            <select
+              className="input-base"
+              value={zoneId}
+              onChange={(e) => setZoneId(e.target.value)}
+            >
+              {zones.map((z) => (
+                <option key={z.id} value={z.id}>{z.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <div className="label">关联订单号（选填）</div>
+          <input
+            type="text"
+            className={clsx("input-base", errors.relatedOrderNo && "border-rose-400 focus:ring-rose-50 focus:border-rose-400")}
+            placeholder="输入订单号，例如：LC202501150001"
+            value={relatedOrderNo}
+            onChange={(e) => setRelatedOrderNo(e.target.value)}
+          />
+          {errors.relatedOrderNo && <div className="text-xs text-rose-500 mt-1">{errors.relatedOrderNo}</div>}
+        </div>
+
+        <div>
+          <div className="label">详细描述 <span className="text-rose-500">*</span></div>
+          <textarea
+            className={clsx("input-base min-h-[100px] resize-none", errors.description && "border-rose-400 focus:ring-rose-50 focus:border-rose-400")}
+            placeholder="请详细描述事件经过、涉及物品、客户信息等..."
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+          {errors.description && <div className="text-xs text-rose-500 mt-1">{errors.description}</div>}
+        </div>
+
+        <div>
+          <div className="label">取证照片（最多3张，选填）</div>
+          <div className="grid grid-cols-3 gap-3">
+            {[0, 1, 2].map((idx) => {
+              const photo = photos[idx];
+              return (
+                <div key={idx} className="relative aspect-square rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 overflow-hidden group">
+                  {photo ? (
+                    <>
+                      <img src={photo} alt={`照片${idx + 1}`} className="w-full h-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => removePhoto(idx)}
+                        className="absolute top-1 right-1 w-6 h-6 rounded-full bg-navy-900/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  ) : (
+                    <label className="w-full h-full flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 transition-colors">
+                      <Upload className="w-6 h-6 text-slate-400 mb-1" />
+                      <span className="text-xs text-slate-400">+上传</span>
+                      <input
+                        ref={(el) => { fileInputRefs.current[idx] = el; }}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => handlePhotoUpload(idx, e)}
+                      />
+                    </label>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div className="label">赔付金额（选填，单位：元）</div>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-medium">¥</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              className="input-base pl-7"
+              placeholder="0.00"
+              value={compensationAmount}
+              onChange={(e) => setCompensationAmount(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 function IncidentCard({ incident, onClick }: { incident: IncidentRecord; onClick: () => void }) {
   const { staff, zones } = useAppStore();
@@ -112,6 +340,7 @@ export default function Incident() {
   const [dateRange, setDateRange] = useState("all");
   const [selected, setSelected] = useState<IncidentRecord | null>(null);
   const [approveComment, setApproveComment] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
 
   const counts = useMemo(() => {
     const now = new Date();
@@ -159,6 +388,7 @@ export default function Incident() {
 
   return (
     <div className="p-6 space-y-6">
+      <IncidentFormModal open={formOpen} onClose={() => setFormOpen(false)} />
       <div className="page-header flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold text-navy-900 font-display tracking-tight">异常事件中心</h1>
@@ -188,7 +418,7 @@ export default function Incident() {
               <option value="30d">近30天</option>
             </Sel>
           </div>
-          <button className="btn-danger"><Plus className="w-4 h-4" />登记新事件</button>
+          <button className="btn-danger" onClick={() => setFormOpen(true)}><Plus className="w-4 h-4" />登记新事件</button>
         </div>
       </div>
 
@@ -258,8 +488,9 @@ export default function Incident() {
                   const hp = idx < selected.photos.length;
                   return (
                     <div key={idx} className="aspect-square rounded-lg bg-slate-100 border border-dashed border-slate-200 flex items-center justify-center overflow-hidden">
-                      {hp ? (<div className="w-full h-full bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center text-slate-500"><Camera className="w-5 h-5" /></div>)
-                        : <span className="text-slate-300 text-2xl font-light">+</span>}
+                      {hp ? (
+                        <img src={selected.photos[idx]} alt={`照片${idx + 1}`} className="w-full h-full object-cover" />
+                      ) : <span className="text-slate-300 text-2xl font-light">+</span>}
                     </div>
                   );
                 })}

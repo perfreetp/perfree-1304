@@ -20,7 +20,9 @@ import {
   mockZones,
 } from "../mock/data";
 
-interface AppState {
+const STORAGE_KEY = "lockerops_store_v1";
+
+interface AppStateData {
   zones: StorageZone[];
   lockers: Locker[];
   orders: StorageOrder[];
@@ -31,7 +33,9 @@ interface AppState {
   financeRecords: FinanceRecord[];
   currentUser: Staff | null;
   activeZoneId: string | null;
+}
 
+interface AppState extends AppStateData {
   setActiveZoneId: (id: string | null) => void;
   createOrder: (order: StorageOrder, financeRecords: FinanceRecord[]) => void;
   checkOutOrder: (
@@ -52,27 +56,52 @@ interface AppState {
     status: Locker["status"],
     remark?: string
   ) => void;
-  updateZone: (zone: StorageZone) => void;
-  createZone: (zone: StorageZone) => void;
+  updateZone: (id: string, patch: Partial<StorageZone>) => void;
+  createZone: (zone: StorageZone, lockers: Locker[]) => void;
 }
 
-const seedCurrentUser = mockStaff.find((s) => s.role === "supervisor") || mockStaff[0];
+function loadInitialState(): AppStateData {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as AppStateData;
+      return parsed;
+    }
+  } catch {
+  }
+  const seedCurrentUser = mockStaff.find((s) => s.role === "supervisor") || mockStaff[0];
+  return {
+    zones: mockZones,
+    lockers: mockLockers,
+    orders: mockOrders,
+    incidents: mockIncidents,
+    staff: mockStaff,
+    shifts: mockShifts,
+    handovers: mockHandovers,
+    financeRecords: mockFinanceRecords,
+    currentUser: seedCurrentUser,
+    activeZoneId: mockZones[0].id,
+  };
+}
 
-export const useAppStore = create<AppState>((set) => ({
-  zones: mockZones,
-  lockers: mockLockers,
-  orders: mockOrders,
-  incidents: mockIncidents,
-  staff: mockStaff,
-  shifts: mockShifts,
-  handovers: mockHandovers,
-  financeRecords: mockFinanceRecords,
-  currentUser: seedCurrentUser,
-  activeZoneId: mockZones[0].id,
+function persistState(state: AppStateData): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+  }
+}
 
-  setActiveZoneId: (id) => set({ activeZoneId: id }),
+const initialState = loadInitialState();
 
-  createOrder: (order, financeRecords) =>
+export const useAppStore = create<AppState>((set, get) => ({
+  ...initialState,
+
+  setActiveZoneId: (id) => {
+    set({ activeZoneId: id });
+    persistState(get());
+  },
+
+  createOrder: (order, financeRecords) => {
     set((state) => {
       const updatedLockers = state.lockers.map((l) =>
         order.lockerIds.includes(l.id)
@@ -90,12 +119,15 @@ export const useAppStore = create<AppState>((set) => ({
         zones: updatedZones,
         financeRecords: [...financeRecords, ...state.financeRecords],
       };
-    }),
+    });
+    persistState(get());
+  },
 
-  checkOutOrder: (orderId, overtimeFee, paymentRecords) =>
+  checkOutOrder: (orderId, overtimeFee, paymentRecords) => {
     set((state) => {
       const order = state.orders.find((o) => o.id === orderId);
       if (!order) return state;
+      if (order.status === "picked") return state;
       const updatedOrder: StorageOrder = {
         ...order,
         status: "picked",
@@ -121,14 +153,18 @@ export const useAppStore = create<AppState>((set) => ({
         zones: updatedZones,
         financeRecords: [...paymentRecords, ...state.financeRecords],
       };
-    }),
+    });
+    persistState(get());
+  },
 
-  createIncident: (incident) =>
+  createIncident: (incident) => {
     set((state) => ({
       incidents: [incident, ...state.incidents],
-    })),
+    }));
+    persistState(get());
+  },
 
-  updateIncidentStatus: (id, status, patch) =>
+  updateIncidentStatus: (id, status, patch) => {
     set((state) => ({
       incidents: state.incidents.map((i) =>
         i.id === id
@@ -147,32 +183,55 @@ export const useAppStore = create<AppState>((set) => ({
             }
           : i
       ),
-    })),
+    }));
+    persistState(get());
+  },
 
-  addShift: (shift) =>
+  addShift: (shift) => {
     set((state) => ({
       shifts: [...state.shifts, shift],
-    })),
+    }));
+    persistState(get());
+  },
 
-  addHandover: (handover) =>
+  addHandover: (handover) => {
     set((state) => ({
       handovers: [handover, ...state.handovers],
-    })),
+    }));
+    persistState(get());
+  },
 
-  updateLockerStatus: (id, status, remark) =>
+  updateLockerStatus: (id, status, remark) => {
     set((state) => ({
       lockers: state.lockers.map((l) =>
         l.id === id ? { ...l, status, remark: remark ?? l.remark } : l
       ),
-    })),
+    }));
+    persistState(get());
+  },
 
-  updateZone: (zone) =>
+  updateZone: (id, patch) => {
     set((state) => ({
-      zones: state.zones.map((z) => (z.id === zone.id ? zone : z)),
-    })),
+      zones: state.zones.map((z) => {
+        if (z.id !== id) return z;
+        const merged: StorageZone = {
+          ...z,
+          ...patch,
+          pricingRule: patch.pricingRule
+            ? { ...z.pricingRule, ...patch.pricingRule }
+            : z.pricingRule,
+        };
+        return merged;
+      }),
+    }));
+    persistState(get());
+  },
 
-  createZone: (zone) =>
+  createZone: (zone, lockers) => {
     set((state) => ({
       zones: [...state.zones, zone],
-    })),
+      lockers: [...state.lockers, ...lockers],
+    }));
+    persistState(get());
+  },
 }));

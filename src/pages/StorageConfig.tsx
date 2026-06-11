@@ -15,10 +15,12 @@ import {
   LayoutGrid,
   Ban,
   Lightbulb,
+  Save,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useAppStore } from "@/store";
-import { StorageZone, ZoneStatus, PricingRule } from "@/types";
+import { StorageZone, ZoneStatus, PricingRule, Locker, LockerSize } from "@/types";
+import { uid } from "@/lib/utils";
 
 const statusTabs: { key: ZoneStatus | "all"; label: string }[] = [
   { key: "all", label: "全部" },
@@ -41,7 +43,15 @@ const pricingTypeMap: Record<PricingRule["type"], string> = {
 
 type DrawerTab = "basic" | "pricing" | "capacity" | "tips";
 
-function ZoneCard({ zone, onView }: { zone: StorageZone; onView: (z: StorageZone) => void }) {
+function ZoneCard({
+  zone,
+  onView,
+  onEdit,
+}: {
+  zone: StorageZone;
+  onView: (z: StorageZone) => void;
+  onEdit: (z: StorageZone) => void;
+}) {
   const rate = zone.totalLockers ? Math.round((zone.usedLockers / zone.totalLockers) * 100) : 0;
   const st = statusMap[zone.status];
 
@@ -105,7 +115,10 @@ function ZoneCard({ zone, onView }: { zone: StorageZone; onView: (z: StorageZone
           <Eye className="w-3.5 h-3.5" />
           查看配置
         </button>
-        <button className="btn-ghost text-xs py-1.5 px-2.5">
+        <button
+          onClick={() => onEdit(zone)}
+          className="btn-ghost text-xs py-1.5 px-2.5"
+        >
           <Edit3 className="w-3.5 h-3.5" />
           编辑
         </button>
@@ -359,9 +372,11 @@ function DrawerTips({ zone }: { zone: StorageZone }) {
 function ConfigDrawer({
   zone,
   onClose,
+  onEdit,
 }: {
   zone: StorageZone | null;
   onClose: () => void;
+  onEdit: (z: StorageZone) => void;
 }) {
   const [tab, setTab] = useState<DrawerTab>("basic");
 
@@ -428,9 +443,452 @@ function ConfigDrawer({
           <button onClick={onClose} className="btn-secondary text-sm">
             关闭
           </button>
-          <button className="btn-primary text-sm">
+          <button onClick={() => onEdit(zone)} className="btn-primary text-sm">
             <Edit3 className="w-4 h-4" />
             编辑配置
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface ZoneFormModalProps {
+  mode: "create" | "edit";
+  initialZone?: StorageZone;
+  onClose: () => void;
+}
+
+function ZoneFormModal({ mode, initialZone, onClose }: ZoneFormModalProps) {
+  const defaultPricing: PricingRule = {
+    type: "hourly",
+    firstHourPrice: 10,
+    overtimeUnitPrice: 5,
+    overtimeStepMinutes: 30,
+    dailyMaxPrice: 60,
+    smallLockerExtra: 0,
+    mediumLockerExtra: 5,
+    largeLockerExtra: 10,
+  };
+
+  const [name, setName] = useState(initialZone?.name ?? "");
+  const [location, setLocation] = useState(initialZone?.location ?? "");
+  const [status, setStatus] = useState<ZoneStatus>(initialZone?.status ?? "open");
+  const [openTime, setOpenTime] = useState(initialZone?.openTime ?? "09:00");
+  const [closeTime, setCloseTime] = useState(initialZone?.closeTime ?? "21:00");
+  const [capacityWarning, setCapacityWarning] = useState(initialZone?.capacityWarning ?? 85);
+  const [insuranceRate, setInsuranceRate] = useState(initialZone?.insuranceRate ?? 0.01);
+  const [tips, setTips] = useState(initialZone?.tips ?? "");
+  const [pricing, setPricing] = useState<PricingRule>(initialZone?.pricingRule ?? defaultPricing);
+  const [bannedItemsText, setBannedItemsText] = useState(
+    initialZone?.bannedItems.join("\n") ?? ""
+  );
+
+  const [totalLockers, setTotalLockers] = useState(initialZone?.totalLockers ?? 30);
+  const [rows, setRows] = useState(5);
+  const [cols, setCols] = useState(6);
+
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const handleSave = () => {
+    const newErrors: Record<string, string> = {};
+    if (!name.trim()) newErrors.name = "请输入寄存区名称";
+    if (!location.trim()) newErrors.location = "请输入所在位置";
+    if (mode === "create" && (!totalLockers || totalLockers <= 0)) {
+      newErrors.totalLockers = "柜位总数必须大于0";
+    }
+    if (capacityWarning < 1 || capacityWarning > 100) {
+      newErrors.capacityWarning = "预警阈值需在 1-100 之间";
+    }
+    if (insuranceRate <= 0) newErrors.insuranceRate = "保险费率必须大于0";
+    if (pricing.firstHourPrice <= 0) newErrors.firstHourPrice = "首小时价格必须大于0";
+    if (pricing.overtimeUnitPrice <= 0) newErrors.overtimeUnitPrice = "超时单价必须大于0";
+    if (pricing.overtimeStepMinutes <= 0) newErrors.overtimeStepMinutes = "超时步长必须大于0";
+    if (pricing.dailyMaxPrice <= 0) newErrors.dailyMaxPrice = "每日封顶价必须大于0";
+    if (pricing.smallLockerExtra < 0) newErrors.smallLockerExtra = "小号加价不能为负";
+    if (pricing.mediumLockerExtra < 0) newErrors.mediumLockerExtra = "中号加价不能为负";
+    if (pricing.largeLockerExtra < 0) newErrors.largeLockerExtra = "大号加价不能为负";
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+
+    const bannedItems = bannedItemsText
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (mode === "create") {
+      const zoneId = uid("zone");
+      const now = new Date().toISOString();
+
+      const r = rows;
+      const c = cols;
+      const total = r * c;
+      const sizes: LockerSize[] = ["S", "M", "L"];
+      const floors = ["F1"];
+      const areas = ["A区"];
+      const lockers: Locker[] = [];
+      for (let i = 0; i < total; i++) {
+        const rowIdx = Math.floor(i / c);
+        const colIdx = i % c;
+        const rowCode = String.fromCharCode(65 + (rowIdx % 26));
+        const colCode = String(colIdx + 1).padStart(2, "0");
+        lockers.push({
+          id: uid("locker"),
+          zoneId,
+          code: `${rowCode}${colCode}`,
+          size: sizes[i % 3],
+          status: "free",
+          floor: floors[rowIdx % floors.length],
+          area: areas[rowIdx % areas.length],
+        });
+      }
+
+      const zone: StorageZone = {
+        id: zoneId,
+        name: name.trim(),
+        location: location.trim(),
+        status,
+        openTime,
+        closeTime,
+        totalLockers: total,
+        usedLockers: 0,
+        pricingRule: pricing,
+        bannedItems,
+        tips: tips.trim(),
+        insuranceRate,
+        capacityWarning,
+        createdAt: now,
+      };
+
+      useAppStore.getState().createZone(zone, lockers);
+      alert("寄存区创建成功！");
+      onClose();
+    } else if (initialZone) {
+      const patch: Partial<StorageZone> = {
+        name: name.trim(),
+        location: location.trim(),
+        status,
+        openTime,
+        closeTime,
+        capacityWarning,
+        insuranceRate,
+        tips: tips.trim(),
+        bannedItems,
+        pricingRule: pricing,
+      };
+      useAppStore.getState().updateZone(initialZone.id, patch);
+      alert("寄存区配置已更新！");
+      onClose();
+    }
+  };
+
+  const isCreate = mode === "create";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-navy-900/40 backdrop-blur-sm animate-fade-in"
+        onClick={onClose}
+      />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col animate-fade-in">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="font-semibold text-navy-900">
+              {isCreate ? "新增寄存区" : "编辑寄存区配置"}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {isCreate ? "填写寄存区基础信息和柜位布局，系统将自动生成柜位" : "修改寄存区的配置信息"}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            <X className="w-4.5 h-4.5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-6">
+          <div>
+            <h4 className="text-sm font-semibold text-navy-800 mb-3 flex items-center gap-2">
+              <Info className="w-4 h-4 text-blue-500" />
+              基础信息
+            </h4>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">寄存区名称 <span className="text-rose-500">*</span></label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="如：国金中心北一门"
+                  className={clsx("input-base", errors.name && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.name && <p className="text-xs text-rose-500 mt-1">{errors.name}</p>}
+              </div>
+              <div>
+                <label className="label">所在位置 <span className="text-rose-500">*</span></label>
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="如：上海国金中心商场"
+                  className={clsx("input-base", errors.location && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.location && <p className="text-xs text-rose-500 mt-1">{errors.location}</p>}
+              </div>
+              <div>
+                <label className="label">运营状态</label>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as ZoneStatus)}
+                  className="input-base"
+                >
+                  <option value="open">营业中</option>
+                  <option value="closed">打烊</option>
+                  <option value="maintenance">维护中</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">容量预警阈值 (%)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={capacityWarning}
+                  onChange={(e) => setCapacityWarning(Number(e.target.value))}
+                  className={clsx("input-base", errors.capacityWarning && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.capacityWarning && <p className="text-xs text-rose-500 mt-1">{errors.capacityWarning}</p>}
+              </div>
+              <div>
+                <label className="label">开始营业时间</label>
+                <input
+                  type="time"
+                  value={openTime}
+                  onChange={(e) => setOpenTime(e.target.value)}
+                  className="input-base"
+                />
+              </div>
+              <div>
+                <label className="label">结束营业时间</label>
+                <input
+                  type="time"
+                  value={closeTime}
+                  onChange={(e) => setCloseTime(e.target.value)}
+                  className="input-base"
+                />
+              </div>
+              <div>
+                <label className="label">保险费率（如 0.01 表示 1%）</label>
+                <input
+                  type="number"
+                  step={0.001}
+                  min={0}
+                  value={insuranceRate}
+                  onChange={(e) => setInsuranceRate(Number(e.target.value))}
+                  className={clsx("input-base", errors.insuranceRate && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.insuranceRate && <p className="text-xs text-rose-500 mt-1">{errors.insuranceRate}</p>}
+              </div>
+              <div />
+              <div className="col-span-2">
+                <label className="label">客户寄存提示</label>
+                <textarea
+                  value={tips}
+                  onChange={(e) => setTips(e.target.value)}
+                  rows={3}
+                  placeholder="提示客户的寄存注意事项..."
+                  className="input-base resize-y"
+                />
+              </div>
+            </div>
+          </div>
+
+          {isCreate && (
+            <div>
+              <h4 className="text-sm font-semibold text-navy-800 mb-3 flex items-center gap-2">
+                <LayoutGrid className="w-4 h-4 text-amber-500" />
+                柜位布局
+              </h4>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="label">柜位总数 <span className="text-rose-500">*</span></label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={totalLockers}
+                    onChange={(e) => setTotalLockers(Number(e.target.value))}
+                    className={clsx("input-base", errors.totalLockers && "ring-2 ring-rose-200 border-rose-300")}
+                  />
+                  {errors.totalLockers && <p className="text-xs text-rose-500 mt-1">{errors.totalLockers}</p>}
+                </div>
+                <div>
+                  <label className="label">行数（可选）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={rows}
+                    onChange={(e) => {
+                      const r = Math.max(1, Number(e.target.value));
+                      setRows(r);
+                      setTotalLockers(r * cols);
+                    }}
+                    className="input-base"
+                  />
+                </div>
+                <div>
+                  <label className="label">列数（可选）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={cols}
+                    onChange={(e) => {
+                      const c = Math.max(1, Number(e.target.value));
+                      setCols(c);
+                      setTotalLockers(rows * c);
+                    }}
+                    className="input-base"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                将自动生成 {rows} 行 × {cols} 列 = {rows * cols} 个柜位，柜位编码如 A01、B03，尺寸按 S/M/L 循环分配。
+              </p>
+            </div>
+          )}
+
+          <div>
+            <h4 className="text-sm font-semibold text-navy-800 mb-3 flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-emerald-500" />
+              收费规则
+            </h4>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">计费模式</label>
+                <select
+                  value={pricing.type}
+                  onChange={(e) => setPricing({ ...pricing, type: e.target.value as PricingRule["type"] })}
+                  className="input-base"
+                >
+                  <option value="hourly">按时计费</option>
+                  <option value="perUse">按次计费</option>
+                  <option value="tiered">阶梯计费</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">首小时价格 (¥)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={pricing.firstHourPrice}
+                  onChange={(e) => setPricing({ ...pricing, firstHourPrice: Number(e.target.value) })}
+                  className={clsx("input-base", errors.firstHourPrice && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.firstHourPrice && <p className="text-xs text-rose-500 mt-1">{errors.firstHourPrice}</p>}
+              </div>
+              <div>
+                <label className="label">超时步长（分钟）</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={pricing.overtimeStepMinutes}
+                  onChange={(e) => setPricing({ ...pricing, overtimeStepMinutes: Number(e.target.value) })}
+                  className={clsx("input-base", errors.overtimeStepMinutes && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.overtimeStepMinutes && <p className="text-xs text-rose-500 mt-1">{errors.overtimeStepMinutes}</p>}
+              </div>
+              <div>
+                <label className="label">超时单价 (¥)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={pricing.overtimeUnitPrice}
+                  onChange={(e) => setPricing({ ...pricing, overtimeUnitPrice: Number(e.target.value) })}
+                  className={clsx("input-base", errors.overtimeUnitPrice && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.overtimeUnitPrice && <p className="text-xs text-rose-500 mt-1">{errors.overtimeUnitPrice}</p>}
+              </div>
+              <div>
+                <label className="label">每日封顶价 (¥)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={pricing.dailyMaxPrice}
+                  onChange={(e) => setPricing({ ...pricing, dailyMaxPrice: Number(e.target.value) })}
+                  className={clsx("input-base", errors.dailyMaxPrice && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.dailyMaxPrice && <p className="text-xs text-rose-500 mt-1">{errors.dailyMaxPrice}</p>}
+              </div>
+              <div />
+              <div>
+                <label className="label">小号柜位加价 (¥)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={pricing.smallLockerExtra}
+                  onChange={(e) => setPricing({ ...pricing, smallLockerExtra: Number(e.target.value) })}
+                  className={clsx("input-base", errors.smallLockerExtra && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.smallLockerExtra && <p className="text-xs text-rose-500 mt-1">{errors.smallLockerExtra}</p>}
+              </div>
+              <div>
+                <label className="label">中号柜位加价 (¥)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={pricing.mediumLockerExtra}
+                  onChange={(e) => setPricing({ ...pricing, mediumLockerExtra: Number(e.target.value) })}
+                  className={clsx("input-base", errors.mediumLockerExtra && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.mediumLockerExtra && <p className="text-xs text-rose-500 mt-1">{errors.mediumLockerExtra}</p>}
+              </div>
+              <div>
+                <label className="label">大号柜位加价 (¥)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={pricing.largeLockerExtra}
+                  onChange={(e) => setPricing({ ...pricing, largeLockerExtra: Number(e.target.value) })}
+                  className={clsx("input-base", errors.largeLockerExtra && "ring-2 ring-rose-200 border-rose-300")}
+                />
+                {errors.largeLockerExtra && <p className="text-xs text-rose-500 mt-1">{errors.largeLockerExtra}</p>}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-semibold text-navy-800 mb-3 flex items-center gap-2">
+              <Ban className="w-4 h-4 text-rose-500" />
+              禁寄物品
+            </h4>
+            <textarea
+              value={bannedItemsText}
+              onChange={(e) => setBannedItemsText(e.target.value)}
+              rows={4}
+              placeholder="每行一项，如：&#10;易燃易爆物品&#10;鲜活易腐物品&#10;贵重物品"
+              className="input-base resize-y"
+            />
+            <p className="text-xs text-slate-500 mt-1">每行输入一项禁寄物品名称</p>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-2 shrink-0 bg-slate-50/50">
+          <button onClick={onClose} className="btn-secondary text-sm">
+            取消
+          </button>
+          <button onClick={handleSave} className="btn-primary text-sm">
+            <Save className="w-4 h-4" />
+            保存
           </button>
         </div>
       </div>
@@ -442,7 +900,25 @@ export default function StorageConfig() {
   const [tab, setTab] = useState<ZoneStatus | "all">("all");
   const [search, setSearch] = useState("");
   const [drawerZone, setDrawerZone] = useState<StorageZone | null>(null);
+  const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
+  const [formZone, setFormZone] = useState<StorageZone | null>(null);
   const zones = useAppStore((s) => s.zones);
+
+  const openCreate = () => {
+    setFormZone(null);
+    setFormMode("create");
+  };
+
+  const openEdit = (zone: StorageZone) => {
+    setDrawerZone(null);
+    setFormZone(zone);
+    setFormMode("edit");
+  };
+
+  const closeForm = () => {
+    setFormMode(null);
+    setFormZone(null);
+  };
 
   const filteredZones = useMemo(() => {
     return zones.filter((z) => {
@@ -474,7 +950,7 @@ export default function StorageConfig() {
           <h1 className="text-2xl font-bold text-navy-900 font-display tracking-tight">寄存区配置</h1>
           <p className="text-sm text-slate-500 mt-1">管理各门店寄存区的基础信息、收费规则与容量设置</p>
         </div>
-        <button className="btn-primary">
+        <button onClick={openCreate} className="btn-primary">
           <Plus className="w-4 h-4" />
           新增寄存区
         </button>
@@ -523,7 +999,7 @@ export default function StorageConfig() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
         {filteredZones.map((z) => (
-          <ZoneCard key={z.id} zone={z} onView={setDrawerZone} />
+          <ZoneCard key={z.id} zone={z} onView={setDrawerZone} onEdit={openEdit} />
         ))}
       </div>
 
@@ -535,7 +1011,19 @@ export default function StorageConfig() {
         </div>
       )}
 
-      <ConfigDrawer zone={drawerZone} onClose={() => setDrawerZone(null)} />
+      <ConfigDrawer
+        zone={drawerZone}
+        onClose={() => setDrawerZone(null)}
+        onEdit={openEdit}
+      />
+
+      {formMode && (
+        <ZoneFormModal
+          mode={formMode}
+          initialZone={formZone ?? undefined}
+          onClose={closeForm}
+        />
+      )}
     </div>
   );
 }

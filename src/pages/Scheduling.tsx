@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { format, addDays, startOfWeek, addWeeks, isSameDay } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import {
@@ -10,13 +10,168 @@ import { clsx } from "clsx";
 import KpiCard from "@/components/KpiCard";
 import { Modal } from "@/components/Tooltip";
 import { useAppStore } from "@/store";
-import { Shift, ShiftType, HandoverRecord, Staff } from "@/types";
+import { Shift, ShiftType, HandoverRecord, Staff, LockerStatus } from "@/types";
+import { uid } from "@/lib/utils";
 
 const shiftMeta: Record<ShiftType, { label: string; cls: string; start: string; end: string }> = {
   morning: { label: "早班", cls: "bg-emerald-100 text-emerald-700 ring-emerald-200", start: "08:00", end: "15:00" },
   afternoon: { label: "中班", cls: "bg-blue-100 text-blue-700 ring-blue-200", start: "14:00", end: "21:00" },
   night: { label: "晚班", cls: "bg-indigo-100 text-indigo-700 ring-indigo-200", start: "20:00", end: "23:00" },
 };
+
+interface HandoverFormModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+function HandoverFormModal({ open, onClose }: HandoverFormModalProps) {
+  const { zones, staff, lockers, currentUser, addHandover } = useAppStore();
+
+  const [zoneId, setZoneId] = useState<string>(zones[0]?.id || "");
+  const [previousStaffId, setPreviousStaffId] = useState<string>(currentUser?.id || "");
+  const [nextStaffId, setNextStaffId] = useState<string>("");
+  const [storedCountOnShift, setStoredCountOnShift] = useState<number>(0);
+  const [abnormalCount, setAbnormalCount] = useState<number>(0);
+  const [remark, setRemark] = useState<string>("");
+
+  useEffect(() => {
+    if (open) {
+      setZoneId(zones[0]?.id || "");
+      setPreviousStaffId(currentUser?.id || "");
+      setNextStaffId("");
+      setAbnormalCount(0);
+      setRemark("");
+    }
+  }, [open, zones, currentUser]);
+
+  useEffect(() => {
+    if (zoneId) {
+      const count = lockers.filter((l) => l.zoneId === zoneId && l.status === "occupied").length;
+      setStoredCountOnShift(count);
+    } else {
+      setStoredCountOnShift(0);
+    }
+  }, [zoneId, lockers]);
+
+  const getStaffName = (id: string) => staff.find((s) => s.id === id)?.name || "";
+
+  const handleSubmit = () => {
+    if (!zoneId || !previousStaffId || !nextStaffId) {
+      alert("请完整填写必填项");
+      return;
+    }
+    if (previousStaffId === nextStaffId) {
+      alert("交班人和接班人不能为同一人");
+      return;
+    }
+    if (storedCountOnShift < 0 || abnormalCount < 0) {
+      alert("件数不能为负数");
+      return;
+    }
+
+    const lockerSnapshot = lockers
+      .filter((l) => l.zoneId === zoneId)
+      .map((l) => ({ lockerId: l.id, status: l.status as LockerStatus }));
+
+    const record: HandoverRecord = {
+      id: uid("hd"),
+      zoneId,
+      shiftDate: format(new Date(), "yyyy-MM-dd"),
+      previousStaffId,
+      nextStaffId,
+      storedCountOnShift,
+      abnormalCount,
+      lockerSnapshot,
+      handoverAt: new Date().toISOString(),
+      previousSignature: getStaffName(previousStaffId),
+      nextSignature: getStaffName(nextStaffId),
+      remark: remark || undefined,
+    };
+
+    addHandover(record);
+    onClose();
+    alert("交接已记录");
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="交接班清点"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>取消</button>
+          <button className="btn-primary" onClick={handleSubmit}>确认交接</button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <label className="label">寄存区 <span className="text-rose-500">*</span></label>
+          <select className="input-base" value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
+            <option value="">请选择寄存区</option>
+            {zones.map((z) => (
+              <option key={z.id} value={z.id}>{z.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">交班人 <span className="text-rose-500">*</span></label>
+            <select className="input-base" value={previousStaffId} onChange={(e) => setPreviousStaffId(e.target.value)}>
+              <option value="">请选择交班人</option>
+              {staff.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">接班人 <span className="text-rose-500">*</span></label>
+            <select className="input-base" value={nextStaffId} onChange={(e) => setNextStaffId(e.target.value)}>
+              <option value="">请选择接班人</option>
+              {staff
+                .filter((s) => s.id !== previousStaffId)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+            </select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">在存件数 <span className="text-rose-500">*</span></label>
+            <input
+              type="number"
+              className="input-base"
+              min={0}
+              value={storedCountOnShift}
+              onChange={(e) => setStoredCountOnShift(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className="label">异常件数 <span className="text-rose-500">*</span></label>
+            <input
+              type="number"
+              className="input-base"
+              min={0}
+              value={abnormalCount}
+              onChange={(e) => setAbnormalCount(Number(e.target.value))}
+            />
+          </div>
+        </div>
+        <div>
+          <label className="label">备注</label>
+          <textarea
+            className="input-base min-h-[80px] resize-y"
+            placeholder="如有异常情况请在此说明..."
+            value={remark}
+            onChange={(e) => setRemark(e.target.value)}
+          />
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 const weekDays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const shiftTypes: ShiftType[] = ["morning", "afternoon", "night"];
@@ -30,6 +185,7 @@ export default function Scheduling() {
   const [viewMode] = useState<"week" | "month">("week");
   const [bottomTab, setBottomTab] = useState<"attendance" | "inventory">("attendance");
   const [modalOpen, setModalOpen] = useState(false);
+  const [handoverOpen, setHandoverOpen] = useState(false);
   const [editing, setEditing] = useState<{ staffId: string; date: string; shiftType?: ShiftType } | null>(null);
   const [formZoneId, setFormZoneId] = useState(zones[0]?.id || "");
   const [formShiftType, setFormShiftType] = useState<ShiftType>("morning");
@@ -106,7 +262,7 @@ export default function Scheduling() {
               </button>
             ))}
           </div>
-          <button className="btn-secondary" onClick={() => { setEditing({ staffId: staff[0]?.id || "", date: format(today, "yyyy-MM-dd") }); setModalOpen(true); }}><HandCoins className="w-4 h-4" />交接班清点</button>
+          <button className="btn-secondary" onClick={() => setHandoverOpen(true)}><HandCoins className="w-4 h-4" />交接班清点</button>
           <button className="btn-primary" onClick={() => { setEditing({ staffId: "", date: format(today, "yyyy-MM-dd") }); setModalOpen(true); }}><Plus className="w-4 h-4" />新建班次</button>
         </div>
       </div>
@@ -345,6 +501,8 @@ export default function Scheduling() {
           </div>
         </div>
       </Modal>
+
+      <HandoverFormModal open={handoverOpen} onClose={() => setHandoverOpen(false)} />
     </div>
   );
 }
